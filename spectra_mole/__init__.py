@@ -745,7 +745,7 @@ def estimate_error(method, separation, contrast):
     :return:
     """
 
-    loaded = np.load('../data/results_2D_{}_statistics.npz'.format(method))
+    loaded = np.load('data/results_2D_{}_statistics.npz'.format(method))
     #print(loaded.keys())
     index_sep = get_index(loaded['separation'], separation)
     index_con = get_index(loaded['contrast'], contrast)
