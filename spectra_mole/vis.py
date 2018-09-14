@@ -86,7 +86,6 @@ def plot_spectrum(spectra, further_text=None, savepath=None):
         'rwp_corr': {}
     }
     
-    moment_display = False
     for spectrum in spectra:
         if spectrum['system'] in styles.keys():
             style = styles[spectrum['system']]
@@ -156,9 +155,9 @@ def plot_spectrum(spectra, further_text=None, savepath=None):
                    length=2.5, width=1.5)
 
     ax.legend()
-    plt.tight_layout()
-    if moment_display:
-        fig.subplots_adjust(bottom=0.28, top=0.98)
+    #plt.tight_layout()
+    if further_text:
+        fig.subplots_adjust(bottom=0.28)
     
     if savepath is not None:
         if not os.path.isdir(savepath):

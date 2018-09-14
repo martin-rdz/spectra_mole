@@ -1,4 +1,4 @@
-#! /usr/bin/env python2.7
+#! /usr/bin/env python3
 """
 Author: radenz@tropos.de
 
@@ -6,7 +6,7 @@ provides the horizontal wind velocity from different sources
 """
 
 
-from __future__ import print_function
+#from __future__ import print_function
 import os, re
 import datetime
 import netCDF4   

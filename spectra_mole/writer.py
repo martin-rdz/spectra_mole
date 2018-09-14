@@ -58,7 +58,7 @@ def save_data(data, config):
     dt_list = [h.ts_to_dt(ts) for ts in data['time_list']]
     hours_cn = np.array([dt.hour + dt.minute / 60. + dt.second / 3600. for dt in dt_list])
                                                                           
-    filename = config['output_dir'] + dt_list[0].strftime("%Y%m%d_%H%M") + "_mole_output.nc" 
+    filename = config['output_dir'] + config['b_dt'].strftime("%Y%m%d_%H%M") + "_mole_output.nc" 
     print("writing results to ", filename)
     #dataset = netCDF4.Dataset(filename, 'w', format='NETCDF4') 
     dataset = netCDF4.Dataset(filename, 'w', format='NETCDF3_CLASSIC')
@@ -67,7 +67,7 @@ def save_data(data, config):
     dim_mode = dataset.createDimension('mode', 1)
     dim_mom = dataset.createDimension('moments', 2) 
     #                                                 
-    mode = dataset.createVariable('system_parameter', np.int32, ('mode',))   
+    mode = dataset.createVariable('system_parameter', np.float32, ('mode',))   
     mode[:] = data['cal_const_used']                                      
     mode.comment = 'Wind profiler system parameter used for calibration'
     #                                                                   
@@ -239,7 +239,7 @@ def save_terminal(data, config, mole_globalattr):
     dt_list = [h.ts_to_dt(ts) for ts in data['time_list']]
     hours_cn = np.array([dt.hour + dt.minute / 60. + dt.second / 3600. for dt in dt_list])
                                                                           
-    filename = config['output_dir'] + dt_list[0].strftime("%Y%m%d_%H%M") + "_mole_terminal_output.nc" 
+    filename = config['output_dir'] + config['b_dt'].strftime("%Y%m%d_%H%M") + "_mole_terminal_output.nc" 
     print("writing results to ", filename)
     #dataset = netCDF4.Dataset(filename, 'w', format='NETCDF4') 
     dataset = netCDF4.Dataset(filename, 'w', format='NETCDF3_CLASSIC')
@@ -278,6 +278,12 @@ def save_terminal(data, config, mole_globalattr):
                         'comment': str(data['flag_doc']),
                         'units': "m s-1", 'units_html': "m s<sup>-1</sup>",
                         'missing_value': -1, 'plot_range': (0, 8),
+                        'plot_scale': "linear"})
+
+    save_item(dataset, {'var_name': 'Z', 'dimension': ('time', 'height'),
+                        'arr': data['Z'], 'long_name': "Reflectivity",
+                        'comment': "Reflectivity",
+                        'units': "dBZ", 'missing_value': -200., 'plot_range': (-50., 20.),
                         'plot_scale': "linear"})
 
     if 'history' in mole_globalattr and 'description' in mole_globalattr:

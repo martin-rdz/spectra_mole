@@ -19,6 +19,7 @@ from . import helpers as h
 from . import recPeakFinder
 from . import vis
 from . import advection
+from . import attenuation
 from . import writer
 #import viridis  # fancy new colormap
 #import VIS_Colormaps  # vertical velocity color map
@@ -78,8 +79,8 @@ def check_consistency(lst):
         timediff = pair[0]['ts'] - pair[1]['ts']
         heightdiff = pair[0]['range'] - pair[1]['range']
         # 5.5sec is not enough as the cloud radar sometimes jumps more than 10s
-        assert abs(timediff) < 7, 'times differ too much: {} - {}'.format(pair[0]['system'],
-                                                                           pair[1]['system'])
+        assert abs(timediff) < 8, 'times differ too much: {} - {}: {} {}'.format(
+            pair[0]['system'], pair[1]['system'], h.ts_to_dt(pair[0]['ts']), h.ts_to_dt(pair[1]['ts']))
         assert abs(heightdiff) < 40., 'heights differ too much: {} - {}'.format(pair[0]['system'],
                                                                                 pair[1]['system'])
 
@@ -108,11 +109,14 @@ def broaden_spectrum(adv_tupel, spectrum, cut_thres=None):
             h.lin2z(spectrum['specLDRmasked']) > -13, ~spectrum['specLDRmasked_mask']) 
     else: 
         plankton_mask = np.full(spectrum['specZ'].shape, False).astype(bool)
-
+    
     specZ_filtered[plankton_mask] = np.nanmin(spectrum['specZ'])/3.
     specSNRco_filtered[plankton_mask] = np.nanmin(spectrum['specSNRco'])/3.
     specZbroad = scipy.ndimage.filters.gaussian_filter1d(specZ_filtered, sigma_b)
     specSNRbroad = scipy.ndimage.filters.gaussian_filter1d(specSNRco_filtered, sigma_b)
+
+    #print("specLDRmasked ", h.lin2z(spectrum['specLDRmasked'][100:-100]))
+    #print("specZ plankton filtered ", h.lin2z(specZ_filtered[100:-100]))
 
     spectrum_b = {'ts': spectrum['ts'], 'range': spectrum['range'], 'vel': spectrum['vel'],
                   'noise_thres': spectrum['noise_thres'], 'system': spectrum['system']+'_broad'}
@@ -231,13 +235,13 @@ def check_rwp_calibration(spectrum_rwp, spectrum_broad):
         logger.info('check calibration: no particle signal')
         bflag['mod_calibration'] = 0
         bflag['unsecure_calibration'] = 0
-        cal_corr = 1
+        cal_corr = 0
     elif np.all(np.abs(deltaZ[mdeltaZ-1:mdeltaZ+2]) < 2) \
         and np.all(np.abs(deltaZ[maxmiraZ - 1:maxmiraZ + 2]) < 2):
         logger.info('check calibration: calibration ok')
         bflag['mod_calibration'] = 0
         bflag['unsecure_calibration'] = 0
-        cal_corr = 1
+        cal_corr = 0
     else:
         logger.info('check calibration: needs correction')
         # weight differently
@@ -320,9 +324,10 @@ def modify_calibration(spectrum, correction_factor):
     logger.debug('cal_const new %s', cal_const)
 
     logger.debug('old lvl %s thres %s', h.lin2z(spectrum['noise_lvl']), h.lin2z(spectrum['noise_thres']))
-    noise_thres = h.z2lin(correction_factor) * spectrum['noise_thres']
-    noise_lvl = h.z2lin(correction_factor) * spectrum['noise_lvl']
-    noise_lvl_hs = h.z2lin(correction_factor) * spectrum['noise_lvl_hs']
+    lin_correction_factor = h.z2lin(correction_factor) if correction_factor != 0 else 1
+    noise_thres = lin_correction_factor * spectrum['noise_thres']
+    noise_lvl = lin_correction_factor * spectrum['noise_lvl']
+    noise_lvl_hs = lin_correction_factor * spectrum['noise_lvl_hs']
     logger.debug('new lvl %s thres %s', h.lin2z(noise_lvl), h.lin2z(noise_thres))
     zspectrum = cal_const * (spectrum['range'] ** 2) * spectrum['specSNRco']
 
@@ -418,6 +423,7 @@ def correct_with_fuzzy(spec_rwp, spec_broad, savepath=False):
     fuzzy_bragg[:np.argmax(blured)] = 0.
     fuzzy_bragg[fuzzy_bragg < 0.05] = 0.
     #left edge of the co correlation
+    #only used for logging, not for correction
     leftedgecocorr = np.argwhere(fuzzy_bragg > 0.01)[0, 0] if np.any(fuzzy_bragg > 0.01) else np.nan
 
     # and the fuzzy membership for larger than the cloud radar
@@ -606,7 +612,8 @@ def fit_peak(spec_corr, moments):
     """
 
     logger.debug('=====    fit peak =================================================')
-
+    # fit is stronger constrained if peak with highest reflectivity is 
+    # below -25 dBZ
     if moments[0].Z < -25. and not (moments[0].Z == -200 or moments == []):
         logger.debug('# moments fuzzy spec_corr (used for fit) %s', moments)
         width = min(max(moments[0].width, 0.09), 0.45)
@@ -659,7 +666,7 @@ def fit_peak(spec_corr, moments):
         #fitted_spectrum = spec_corr['specZ'].copy()
         #fitted_spectrum[:] = 1e-20
 
-    if np.abs(moments_fit[0].width-0.4) < 0.15 and np.abs(moments_fit[0].v-0.5) < 0.01:
+    if np.abs(moments_fit[0].width-0.2) < 0.15 and np.abs(moments_fit[0].v-0.5) < 0.01:
         # fit somehow failed
         logger.info('moment fit replicated input')
         moments_fit = [mom(-200, -99., -99., -1, -1, -200)]
@@ -704,7 +711,7 @@ def estimate_flag(bflag, corr_moments, cr_moments, cr_ldr, bounds_unfiltered_mom
 
     if bflag["particle_influence"] == 1:
         flag = 1
-        if corr_moments[0].snr < 8:
+        if corr_moments[0].snr < 10:
             addbflag['low_snr'] = 1
             flag = 3
         if cr_ldr > -13:
@@ -918,6 +925,7 @@ class mira():
         self.fspec = netCDF4.Dataset(self.files['spec'], 'r')
         self.system = "cr"  # system type for plot routine
         # ------------------------------------------------------------
+        self.atten = attenuation.cloudnet_attenuation(self.files["cloudnet"])
 
         self.vel_list = self.fspec.variables["velocity"][:]
         # for some reason the velocity list is not sorted
@@ -1000,10 +1008,15 @@ class mira():
         # itm = np.where(self.time_list_mmclx == min(self.time_list_mmclx, key=lambda t: abs(sel_ts - t)))[0][0]
         itm = h.argnearest2(self.time_list_mmclx, sel_ts)
 
-        assert np.abs(sel_ts - self.time_list[it]) < self.delta_t, 'timestamps more than '+str(self.delta_t)+'s apart'
-        assert np.abs(sel_ts - self.time_list_mmclx[itm]) < self.delta_t, 'timestamps more than '+str(self.delta_t)+'s apart'
-        assert np.abs(self.time_list[it] - self.time_list_mmclx[itm]) < self.delta_t, 'timestamps more than '+str(self.delta_t)+'s apart'
+        assert np.abs(sel_ts - self.time_list[it]) < self.delta_t, \
+                'timestamps (spec) more than {}s apart, {} {}'.format(self.delta_t, h.ts_to_dt(sel_ts), h.ts_to_dt(self.time_list[it]))
+        assert np.abs(sel_ts - self.time_list_mmclx[itm]) < self.delta_t, \
+                'timestamps (mmclx) more than {}s apart, {} {}'.format(self.delta_t, h.ts_to_dt(sel_ts), h.ts_to_dt(self.time_list_mmclx[it]))
+        assert np.abs(self.time_list[it] - self.time_list_mmclx[itm]) < self.delta_t,\
+                 'timestamps (spec-mmclx) more than {}s apart, {} {}'.format(self.delta_t, h.ts_to_dt(self.time_list[it]), h.ts_to_dt(self.time_list_mmclx[itm]))
         logger.debug('cloud radar indexes it %s itm %s it %s', it, itm, ir)
+
+        gas_atten = self.atten.get_pixel(sel_ts, sel_range)
         
         if range_average:
             window = np.array([0.2, 0.6, 1., 0.6, 0.2])
@@ -1046,7 +1059,7 @@ class mira():
             specSNRco_mask = (specSNRco == 0.)
             #specSNRco = np.ma.masked_equal(specSNRco, 0)
 
-
+        specZ = specZ*h.z2lin(gas_atten)
         noise_thres = 1e-25 if np.all(specZ_mask) else specZ[~specZ_mask].min()*h.z2lin(self.settings['thres_factor_co'])
         spectrum = {'ts': self.time_list[it], 'range': self.range_list[ir], 'vel': self.vel_list,
                     'specZ': specZ[::-1], 'noise_thres': noise_thres, 'system': self.system}
@@ -1060,7 +1073,9 @@ class mira():
         spectrum['specZcx_mask'] = np.logical_or(spectrum['specZ_mask'], spectrum['specLDR_mask'])
         # print('test specZcx calc')
         # print(spectrum['specZcx_mask'])
-        # print(spectrum['specZcx'])
+        ldr = np.sum(spectrum["specZcx"][~spectrum['specLDR_mask']])/np.sum(spectrum['specZ'][~spectrum['specLDR_mask']])
+        #print("LDR/ICPR ", ldr, h.lin2z(ldr))
+        #print("LDR_corr ", h.lin2z(ldr - 0.0032))        
         spectrum['specSNRcx'] = spectrum['specSNRco']*spectrum['specLDR']
         spectrum['specSNRcx_mask'] = np.logical_or(spectrum['specSNRco_mask'], spectrum['specLDR_mask'])
 
@@ -1140,12 +1155,14 @@ class rwp():
         self.delta_t = np.mean(np.diff(self.time_list))
         # build height index
         # self.delta_h = f.variables["HeightSpacing"][0]
-        self.delta_h = 93.997
+        self.delta_h = self.f.variables["HeightSpacing"][0]
+        assert np.abs(self.delta_h - 93.997) < 0.1, "Height spacing wrong"
         # correct offset estimated by plots (comparison with cr); half a rangegate: 46.9985
         self.range_list = np.array(
-            [i * self.delta_h + (448.0 - 46.9985)
+            [i * self.delta_h + (448.3 - self.delta_h/2.)
              # [i*self.delta_h + (448.0+46.9985)
              for i in range(self.f.variables["Gates"][0])])
+        #print("range list ", self.range_list.shape, self.range_list)
         # 0m/s bin left or right of array center???
         # Nyquist frequency in both directions
         self.delta_v = self.f.variables["NyquistFrequency"][0] / 256.
@@ -1202,7 +1219,8 @@ class rwp():
         else:
             it = np.where(self.time_list == min(self.time_list, key=lambda t: abs(sel_ts - t)))[0][0]
             ir = np.where(self.range_list == min(self.range_list, key=lambda t: abs(sel_range - t)))[0][0]
-        assert np.abs(sel_ts - self.time_list[it]) < self.delta_t, 'timestamps more than '+str(self.delta_t)+'s apart'
+        assert np.abs(sel_ts - self.time_list[it]) < self.delta_t,\
+                 'timestamps (rwp) more than {}s apart, {} {}'.format(self.delta_t, h.ts_to_dt(sel_ts), h.ts_to_dt(self.time_list[it]))
         logger.info('selected it %s, ir %s', it, ir)
 
         #ntime = nearest(sel_timestamp, self.time_list, self.delta_t)
