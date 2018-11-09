@@ -1,10 +1,10 @@
 #! /usr/bin/env python3
 """
-Author: radenz@tropos.de
-
-provides the horizontal wind velocity from different sources
+Load the horizontal wind velocity from different sources
 """
-
+"""
+Author: radenz@tropos.de
+"""
 
 #from __future__ import print_function
 import os, re
@@ -17,14 +17,12 @@ import numpy as np
 
 
 def calc_hvel(data):
-    """calculate absolute horizontal velocity from u,v"""
+    """calculate absolute horizontal velocity from gdas data piece"""
     hvel = np.sqrt(np.power(data[:,4],2) + np.power(data[:,5], 2))
     return hvel
 
     
 def dt_to_timestamp(dt):
-    """calculate timestamp from dt
-    only needed for python2.7, copied from spectra mole"""
     #timestamp_midnight = int((datetime.datetime(self.dt[1].year, self.dt[1].month, self.dt[1].day) - datetime.datetime(1970, 1, 1)) / datetime.timedelta(seconds=1)) #python3
     return (dt - datetime.datetime(1970, 1, 1)).total_seconds()
 
@@ -34,7 +32,14 @@ def ts_to_dt(ts):
     
 def nearest(point, array, delta):
     """ searches nearest point in given array and returns (i, value[i]) 
-    taken from BA programm an improved with index calculation, copied from spectra mole"""
+    
+    Args:
+        point: value to find
+        array: array of values
+        delta: step in array
+    Returns:
+        ``(index, nearest_value)``
+    """
     #i = bisect.bisect_left(array, point)
     i = int( (point - array[0])/delta )
     #print("search nearest ", i, point, " | ", array[max(0,i-5):i+6])
@@ -51,11 +56,14 @@ class gdas():
     loads advection speed profile from gdas data, interpolates it to a (given) grid
     and provides it to spectra mole;
     there it is used for the correction of beam width broadening
+    height grid may be specified, whereas time grid is fixed
+
+    Args:
+        dt: date of the measurement
+        height_grid: height grid to interpolate
     """
     
     def __init__(self, dt, height_grid):
-        """define suitable files, load them and interpolate
-        dt: day of the measurement"""
         self.dt = dt
         self.height_grid = height_grid
         self.delta_h = np.mean(np.diff(self.height_grid))
@@ -128,11 +136,13 @@ class gdas():
         #ax.plot(self.profiles[-1,:], self.height_grid, "-", color="blue")
 
     def get_pixel(self, ts, height):
-        """search specified timestamp/height and return advection speed [m/s]
-        NEW height: search for height and interpolate
-        timestamp: timestamp for which the pixel shall be searched 
+        """get nearest advection information
+
+        Args:
+            ts: timestamp
+            height: height in profile
         
-        shear not working yet
+        .. warning:: shear not working yet (grid too coarse)
         """
         
         nheight = nearest(height, self.height_grid, self.delta_h)      
@@ -141,13 +151,13 @@ class gdas():
 
 
 class wp_advect():
-    """
-    loads advection velocity profile form the windprofiler off-zenith measurement
-    the output should be consistent with the gdas class
+    """loads advection velocity profile form the windprofiler off-zenith measurement
+    
+    Args:
+        filename: file with rwp off zenith observation
     """
 
     def __init__(self, filename):
-        """ """
         self.filename = filename
         self.f = netCDF4.Dataset(filename, 'r')
         #self.f = NetCDF.NetCDFFile(filename, 'r') 
@@ -172,12 +182,16 @@ class wp_advect():
         #    print(i, datetime.datetime.utcfromtimestamp(self.time_list[i]))
 
     def get_pixel(self, ts, height):
-        """search specified timestamp/height and return advection speed [m/s]
+        """get nearest advection information
         2D interpolation included
-        NEW height: search for height and interpolate
-        timestamp: timestamp for which the pixel shall be searched 
-        
-        shear not working yet
+
+        Args:
+            ts: timestamp
+            height: height in profile
+        Returns:
+            ``advect_vel, 0.0, (u_ts, v_ts)``
+
+        .. warning:: shear not tested
         """
         
         #print('selected timestamp ', ts)
@@ -254,15 +268,13 @@ class wp_advect():
 
 
 class cloudnet_advect():
-    """
-    load the advection velocity from the cloudnet categorize file
-    output should be consistent with the gdas class
-    """
+    """load the advection velocity from the cloudnet categorize file
     
+    Args:
+        filename: file with rwp off zenith observation
+    """
     def __init__(self, filename):
-        """ 
-        load the cloudnet categorize nc file
-        """
+
         print("---- cloudnet advect -------------------------------------------")
         self.filename = filename
         self.f = netCDF4.Dataset(filename, 'r')
@@ -294,12 +306,18 @@ class cloudnet_advect():
               ts_to_dt(self.time_list[-1].astype(int)))
         print("delta t ", self.delta_t)
 
-    def get_pixel(self, ts, height):
-        """ 
-        get the horizontal wind 
-        and the wind shear (du/dz as the average of 3 range gates)
 
-        adjusted for the more complex formula (Nastrom 1997)
+    def get_pixel(self, ts, height):
+        """get nearest advection information
+        2D interpolation included
+
+        Args:
+            ts: timestamp
+            height: height in profile
+        Returns:
+            ``advect_vel, shear, (u_ts, v_ts)``
+
+        .. warning:: shear not reliable yet (grid too coarse)
         """
         #print('selected timestamp ', ts)
         ntime = nearest(ts, self.time_list, self.delta_t)      
@@ -319,6 +337,8 @@ class cloudnet_advect():
         shear_v = 0.5*((self.v_vel[ntime[0], nheight[0]+1] - self.v_vel[ntime[0], nheight[0]])/(self.height[nheight[0]+1]-self.height[nheight[0]]) \
                      + (self.v_vel[ntime[0], nheight[0]] - self.v_vel[ntime[0], nheight[0]-1])/(self.height[nheight[0]]-self.height[nheight[0]-1])) 
         return advect_vel, shear_u+shear_v, (u_vel, v_vel)
+
+
 
 if __name__ == '__main__':
     #profile = gdas(datetime.datetime(2013, 9, 25), np.arange(300,7000,100))

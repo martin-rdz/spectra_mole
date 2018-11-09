@@ -2,7 +2,12 @@
 
 Software for combining the Doppler spectra of a radar wind profiler and a cloud radar.
 The signal of falling particles is separeted from the clear air Bragg scattering using an
-algorithm proposed by Radenz et al [2018, AMTD](https://doi.org/10.5194/amt-2018-125).
+algorithm proposed by Radenz et al [2018, AMT](<https://doi.org/10.5194/amt-11-5925-2018>).
+
+<a href="https://doi.org/10.5281/zenodo.1419486"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.1419486.svg" alt="DOI"></a>
+
+
+Technical documentation is available at [spectra_mole-doc](https://martin-rdz.github.io/spectra_mole-doc/)
 
 ### Requirements
 
@@ -56,10 +61,25 @@ The spectra mole software package should be included in a file structure similar
 
 ```
 
+Please update your meta information in the `output_meta.toml` file.
+
+### Run with Docker
+
+Deployment may be simplified using a docker image which includes all the dependencies.
+A Dockerfile is included in this repository.
+
+    # build the Dockerfile
+    docker build -t mole-runtime .
+    # run an interactive bash on this image
+    docker run -v `pwd`:/mole2 -v [folder with data]:/colrawi -p 8890:8890 -it mole-runtime /bin/bash
+    # or to build the documentation as well
+    docker run -v `pwd`/..:/mole2 -v [folder with data]:/colrawi -p 8890:8890 -it mole-runtime /bin/bash
+
+
 ### References
-Radenz, M., Bühl, J., Lehmann, V., Görsdorf, U., and Leinweber, R.: Combining cloud radar and radar wind profiler for a value added estimate of vertical air motion and particle terminal velocity within clouds, Atmos. Meas. Tech. Discuss., https://doi.org/10.5194/amt-2018-125, in review, 2018.
+Radenz, M., Bühl, J., Lehmann, V., Görsdorf, U., and Leinweber, R.: Combining cloud radar and radar wind profiler for a value added estimate of vertical air motion and particle terminal velocity within clouds, Atmos. Meas. Tech., 11, 5925-5940, <https://doi.org/10.5194/amt-11-5925-2018>, 2018.
 
 
 ### License
 Copyright 2018, Martin Radenz
-[MIT License](http://www.opensource.org/licenses/mit-license.php)
+[MIT License](<http://www.opensource.org/licenses/mit-license.php>)

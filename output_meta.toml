@@ -1,0 +1,5 @@
+institution = "MOL-RAO (DWD), TROPOS"
+contact = "buehl@tropos.de or radenz@tropos.de"
+location = "Lindenberg, Germany"
+description_air = "spectra mole processed wind profiler data; by TROPOS with data from MOL-RAO (DWD)"
+description_terminal = "Combined mole-rwp with mmclx radar data"

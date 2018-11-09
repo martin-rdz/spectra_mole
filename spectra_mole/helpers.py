@@ -11,6 +11,14 @@ import datetime
 import numpy as np
 from numba import jit
 
+from collections import namedtuple
+
+
+# make a named tupel that contains the peak moments
+mom = namedtuple('mom', ['Z', 'v', 'width', 'ileft', 'iright', 'snr'])
+mom.__doc__ += '\nnamedtuple for the properites of a peak'
+# mom.v.__doc__ = 'Title of first printing'
+
 def list_of_elem(elem, length):
     return [elem for i in range(length)]
 

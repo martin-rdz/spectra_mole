@@ -10,23 +10,39 @@ import datetime
 import netCDF4
 import numpy as np
 import subprocess
+import toml
 from . import helpers as h
 
 def save_item(dataset, item_data):
     """
-    * var_name (Z)
-    * dimension ( ('time', 'height') )
-    * arr (self.corr_refl_reg[:].filled())
-    * long_name ("Reflectivity factor")
-    * optional
-    * comment ("Wind profiler reflectivity factor corrected by cloud radar (only Bragg contribution)")
-    * units ("dBz")
-    * missing_value (-200.)
-    * plot_range ((-50., 20.))
-    * plot_scale ("linear")
+    Save an item to the dataset with the data given as a dict
+
+    Args:
+        dataset (:obj:netCDF4.Dataset): netcdf4 Dataset to add
+        item_data (dict): with the data to add, for example:
+
+    ==================  ===============================================================
+     Key                 Example                            
+    ==================  ===============================================================
+     ``var_name``        Z                                  
+     ``dimension``       ('time', 'height')                 
+     ``arr``             self.corr_refl_reg[:].filled()     
+     ``long_name``       "Reflectivity factor"              
+     **optional**                                             
+     ``comment``         "Wind profiler reflectivity factor corrected by cloud radar"
+     ``units``           "dBz"                              
+     ``missing_value``   -200.                              
+     ``plot_range``      [-50., 20.]                        
+     ``plot_scale``      "linear"                           
+     ``vartype``         np.float32                         
+    ==================  ===============================================================
     """
 
-    item = dataset.createVariable(item_data['var_name'], np.float32, item_data['dimension'])
+    if 'vartype' in item_data.keys():
+        item = dataset.createVariable(item_data['var_name'], item_data['vartype'], item_data['dimension'])
+    else:
+        item = dataset.createVariable(item_data['var_name'], np.float32, item_data['dimension'])
+
     item[:] = item_data['arr']
     item.long_name = item_data['long_name']
     if 'comment' in item_data.keys():
@@ -44,14 +60,19 @@ def save_item(dataset, item_data):
     if 'axis' in item_data.keys():
         item.axis = item_data['axis']
 
+
 def get_git_hash():
     label = subprocess.check_output(["git", "describe", "--always"])
     return label
 
+
 def save_data(data, config):
-    """
-    write the data to a netcdf file
+    """write the data to a netcdf file
     standard path and filename %Y%m%d_%H%M_mole_output.nc 
+
+    Args:
+        data (dict): output data from correct_region
+        config (dict): configuration
                 
     """
     # convert the times to cloudnet fomat                               
@@ -217,11 +238,14 @@ def save_data(data, config):
                         'missing_value': -1, 'plot_range': (0, 127),
                         'plot_scale': "linear"})
 
-    dataset.description = "spectra mole processed wind profiler data; by TROPOS with data from MOL-RAO (DWD)"
+    with open('output_meta.toml') as output_meta:
+            meta_info = toml.loads(output_meta.read())
+
+    dataset.description = meta_info['description_air']
     #dataset.settings = str(self.bound)
-    dataset.location = "Lindenberg, Germany"
-    dataset.institution = "MOL-RAO (DWD), TROPOS"
-    dataset.contact = "buehl@tropos.de or radenz@tropos.de"
+    dataset.location = meta_info["location"]
+    dataset.institution = meta_info["institution"]
+    dataset.contact = meta_info["contact"]
     dataset.creation_time = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     #dataset.mole_commit_id = get_git_hash()
     dataset.day = dt_list[0].day
@@ -231,9 +255,12 @@ def save_data(data, config):
 
 
 def save_terminal(data, config, mole_globalattr):
-    """
-    write the data to a netcdf file
+    """write the data to a netcdf file
     standard path and filename %Y%m%d_%H%M_mole_output.nc 
+
+    Args:
+        data (dict): output data from terminal_region
+        config (dict): configuration
                 
     """
     dt_list = [h.ts_to_dt(ts) for ts in data['time_list']]
@@ -293,7 +320,15 @@ def save_terminal(data, config, mole_globalattr):
         history = mole_globalattr['creation_time'] + ' ' + str(mole_globalattr['description'])
     else:
         history = "none"
-    mole_globalattr['description'] = " Combined mole-rwp with mmclx radar data by radenz@tropos.de"
+
+    with open('output_meta.toml') as output_meta:
+        meta_info = toml.loads(output_meta.read())
+
+    dataset.description = meta_info['description_terminal']
+    dataset.location = meta_info["location"]
+    dataset.institution = meta_info["institution"]
+    dataset.contact = meta_info["contact"]
+
     mole_globalattr['history'] = history
     mole_globalattr['creation_time'] = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     #mole_globalattr['mole_commit_id'] = get_git_hash()

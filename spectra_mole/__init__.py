@@ -1,7 +1,7 @@
 #! /usr/bin/env python3
 # coding=utf-8
 
-from collections import namedtuple
+import collections
 
 import logging
 import itertools
@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 import scipy.interpolate
 import scipy.ndimage
 from scipy.optimize import curve_fit
+
 
 #from numba import jit
 from . import helpers as h
@@ -37,16 +38,25 @@ file_handler.setLevel(logging.DEBUG)
 logger.addHandler(file_handler)
 logger.addHandler(stream_handler)
 
-# make a named tupel that contains the peak moments
-mom = namedtuple('mom', ['Z', 'v', 'width', 'ileft', 'iright', 'snr'])
+
 mom2str = lambda l: ' '.join(['Z:{0:.2f} v:{1:.2f} w:{2:.2f} snr:{5:.2f} | '.format(*mom) for mom in l])
 
 flatten = lambda l: sum(map(flatten, l), []) if isinstance(l,list) else [l]
 peaks2vel = lambda vel, peaks: [(vel[peak[0]], vel[peak[1]]) for peak in peaks]
 vel2str = lambda vel: ['({:4.2f} {:4.2f})'.format(*pair) for pair in vel]
 
+
 def peaks2snr(noise, z, peaks):
-    """calculate the snr for noise, z and peaks"""
+    """calculate the snr for each peak
+    
+    Args:
+        noise (float): noise level
+        z (1d-array): spectral reflectivity
+        peaks (tupel or list of tupels): boundaries of the peaks
+
+    Returns:
+        SNR value of the peaks (or list of values)
+    """
     if not peaks:
         raise ValueError('empty peak list')
     elif type(peaks) is tuple:
@@ -55,19 +65,24 @@ def peaks2snr(noise, z, peaks):
         return [h.lin2z(np.sum(z[peak[0]:peak[1] + 1]/noise)) for peak in peaks]
 
 def gauss_func(x, m, sd):
-    """
-    calculate the gaussian function on a given grid
+    """calculate the gaussian function on a given grid
 
-    x: grid
-    m: mean
-    sd: standard deviation
+    Args:
+        x (array): grid
+        m (float): mean
+        sd (float): standard deviation
+
+    Returns:
+        array
     """
     a = 1. / (sd * np.sqrt(2. * np.pi))
     return a * np.exp(-(x - m) ** 2 / (2. * sd ** 2))
 
 def check_consistency(lst):
     """
-    :lst: list of spectra dictionaries
+    Args:
+        lst: list of spectra dictionaries
+            (has to contain ``system``, ``ts``, ``range``)
     """ 
     #timestamps = ['{} {:.1f}'.format(elem['system'], elem['ts']) for elem in lst]
     timestamps = ['{} {}'.format(elem['system'], h.ts_to_dt(elem['ts']).strftime('%m-%d %H:%M:%S')) for elem in lst]
@@ -86,7 +101,16 @@ def check_consistency(lst):
 
 #@profile
 def broaden_spectrum(adv_tupel, spectrum, cut_thres=None):
-    """ """
+    """
+    Args:
+        adv_tupel (tupel): advection velocity, shear, (u, v)
+        spectrum (dict): The second parameter
+        cut_thres (int, optional): mask values beow this threshold, else
+            use the ``noise_thres`` in ``spectrum``
+
+    Returns:
+        dict with broadened spectrum
+    """
     adv_vel, shear, _ = adv_tupel
 
     half_bw = 0.0262
@@ -97,8 +121,6 @@ def broaden_spectrum(adv_tupel, spectrum, cut_thres=None):
     logger.debug('delta v %s', np.mean(np.diff(spectrum['vel'])))
     sigma_b = np.sqrt(sigma_sq) / np.mean(np.diff(spectrum['vel']))
     logger.info('sigma_b %s', sigma_b)
-
-
 
     specZ_filtered = spectrum['specZ'].copy()
     specSNRco_filtered = spectrum['specSNRco'].copy()
@@ -133,9 +155,14 @@ def broaden_spectrum(adv_tupel, spectrum, cut_thres=None):
 
 
 def check_particle_influence(spectrum, noise_thres):
-    """
-    check if there is signal in the spectrum above the threshold
-    :return: bflag <dict>
+    """check if there is signal in the spectrum above the threshold
+    internally a Q of 3 is assumed (noise_thres = 3*noise_lvl)
+
+    Args:
+        spectrum (dict): spectra dict
+        noise_thres (float): the noise threshold
+    Returns:
+        bflag dict
     """
     if np.any(spectrum['specZ'] > noise_thres/3.):
         bflag = {"particle_influence": 1}
@@ -145,10 +172,13 @@ def check_particle_influence(spectrum, noise_thres):
 
 #@profile
 def calc_moments(spectrum):
-    """
-    replaces the calc_pnm_classic function in original mole
+    """estimate the moments for peaks above the noise threshold
+    if no peak is found ``mom(-200, -99., -99., -1, -1, -200)``
 
-    :return : [mom <namedtuple>]
+    Args:
+        spectrum (dict): spectra dict
+    Returns:
+        list of moments (namedtuple) in decending order
     """
 
     peak_list = h.detect_peak_simple(spectrum['specZ'], lthres=spectrum['noise_thres'])
@@ -164,18 +194,27 @@ def calc_moments(spectrum):
             (spectrum['vel'][peak[0]:peak[1] + 1] - vel) ** 2, 
             weights=spectrum['specZ'][peak[0]:peak[1] + 1]
             ))
-        moments.append(mom(refl, vel, std, peak[0], peak[1], snr))
+        moments.append(h.mom(refl, vel, std, peak[0], peak[1], snr))
 
     # sort the moments list in descending order
     moments.sort(key=lambda x: x.Z, reverse=True)
     if not moments:
         # no peaks were found
-        moments.append(mom(-200, -99., -99., -1, -1, -200))
+        moments.append(h.mom(-200, -99., -99., -1, -1, -200))
     return moments
 
 
 def filter_moments(moments, v, sigma, cr_iright):
-    """remove all moments that are left of v+sigma and width < 0.08"""
+    """remove all moments that are left of v+sigma, width < 0.08 and moment.iright > cr_iright
+    
+    Args:
+        moments: list of moments
+        v: mean velocity of cloud radar
+        sigma: width of cloud radar
+        cr_iright: right edge of cloud radar
+    Returns:
+        list of filtered moments, bflag
+    """
 
     new_moments = []
     bflag = {'removed_moments': 0}
@@ -188,7 +227,7 @@ def filter_moments(moments, v, sigma, cr_iright):
 
         if not new_moments:
             # no peaks were found
-            new_moments.append(mom(-200, -99., -99., -1, -1, -200))
+            new_moments.append(h.mom(-200, -99., -99., -1, -1, -200))
         new_moments.sort(key=lambda x: x.Z, reverse=True)
         bflag['removed_moments'] = 1
 
@@ -199,7 +238,15 @@ def check_rwp_calibration(spectrum_rwp, spectrum_broad):
     """
     check the rwp calibration by comparing with a broadened cloud radar spectrum
 
-    :return: bflag, -cal_corr
+    based on different criteria it is decided if the calibration in trustworthy
+    (``unsecure_calibration``) and correctable (``mod_calibration``)
+
+    Args:
+        spectrum_rwp (dict): spectra dict of the wind profiler
+        spectrum_broad (dict): spectra dict of cloud radar 
+            adapted to rwp sampling characteristics
+    Returns:
+        bflag, -cal_corr
     """
     # TODO take care with the sign
     bflag = {}
@@ -267,12 +314,15 @@ def check_rwp_calibration(spectrum_rwp, spectrum_broad):
 
 def check_noise_level(spectrum_rwp, extern=None):
     """
-    check if the Hildebrand-Sekhon noise is more than 4dB above the noise 
+    check if the Hildebrand-Sekhon noise ``noise_lvl_hs`` is more than 4dB above the noise 
     provided by the standard signal processing
-
     if yes replace the noise information in the spectrum_rwp
 
-    :returns : spectrum_rwp, bflag
+    Args:
+        spectrum (dict): spectra dict
+        extern (optinal): additional noise threshold
+    Returns:
+        spectrum_rwp, bflag
     """
     
     bflag = {}
@@ -296,10 +346,14 @@ def check_noise_level(spectrum_rwp, extern=None):
 
 #@profile
 def estimate_calibration(spectrum_rwp, spectrum_broad):
-    """
-    estimate the calibration constant in the interval -3.00 -0.94
+    """estimate the calibration constant in the interval -3.00 -0.7 m/s
 
-    :return : cal_const
+    Args:
+        spectrum_rwp (dict): spectra dict of the wind profiler
+        spectrum_broad (dict): spectra dict of cloud radar 
+            adapted to rwp sampling characteristics
+    Returns:
+        cal_const or ``np.nan`` if no signal in this interval
     """
     ivl, ivr = 91, 118
     assert abs(spectrum_rwp['vel'][ivl] - -3.0) < 0.1
@@ -316,7 +370,15 @@ def estimate_calibration(spectrum_rwp, spectrum_broad):
 
 
 def modify_calibration(spectrum, correction_factor):
-    """ modify the calibration of a given spectrum (only 'specZ') by a correction factor"""
+    """ update the calibration constant with a correction factor
+    and calculate a new reflectivity spectrum from the SNR
+    
+    Args:
+        spectrum_rwp (dict): spectra dict
+        correction_factor (float): 
+    Returns:
+        modified spectrum dict
+    """
     assert not np.isnan(correction_factor), 'correction factor is not valid'
     spectrum_mod = spectrum.copy()
     logger.debug('cal_const %s %s', spectrum['cal_const'], correction_factor)
@@ -340,13 +402,17 @@ def modify_calibration(spectrum, correction_factor):
 
     return spectrum_mod
 
+
 #@profile
 def correct_with_weighting(spec_rwp, spec_broad):
-    """
-    calculate the corrected spectrum with the weighting functions
+    """calculate the corrected spectrum with the weighting functions
 
-    steps
-    #.
+    Args:
+        spectrum_rwp (dict): spectra dict of the wind profiler
+        spectrum_broad (dict): spectra dict of cloud radar 
+            adapted to rwp sampling characteristics
+    Returns:
+        Bragg only spectrum dict
     """
     wipro_min = np.nanmin(spec_rwp['specZ'])
     wipro_zspec_temp = h.fill_with(spec_rwp['specZ'], spec_rwp['specZ_mask'], wipro_min)
@@ -390,8 +456,15 @@ def correct_with_weighting(spec_rwp, spec_broad):
 
 #@profile
 def correct_with_fuzzy(spec_rwp, spec_broad, savepath=False):
-    """
-    
+    """calculate the corrected spectrum with fuzzy membership
+    for later application of the fitting 
+
+    Args:
+        spectrum_rwp (dict): spectra dict of the wind profiler
+        spectrum_broad (dict): spectra dict of cloud radar 
+            adapted to rwp sampling characteristics
+    Returns:
+        Bragg only spectrum dict
     """
     wipro_min = np.nanmin(spec_rwp['specZ'])
     wipro_zspec_temp = h.fill_with(spec_rwp['specZ'], spec_rwp['specZ_mask'], wipro_min)
@@ -433,6 +506,7 @@ def correct_with_fuzzy(spec_rwp, spec_broad, savepath=False):
     fuzzy_bragg2[fuzzy_bragg2 < 0.05] = 0.
     leftedgecr = np.argwhere(fuzzy_bragg2 > 0.01)[0, 0] if np.any(fuzzy_bragg2 > 0.01) else 0
 
+    # minimum peak width
     if np.sum(fuzzy_bragg > fuzzy_cloudradar) < 3:
         logger.debug("set fuzzy bragg to 0, %s", np.sum(fuzzy_bragg > fuzzy_cloudradar))
         fuzzy_bragg[:] = 0.
@@ -575,40 +649,28 @@ def correct_with_fuzzy(spec_rwp, spec_broad, savepath=False):
     return spec_corr
 
 
-
-def gauss_func(x, m, sd):
-    """
-    calculate the gaussian function on a given grid
-    x: grid
-    m: mean
-    sd: standard deviation
-    """
-    a = 1. / (sd * np.sqrt(2. * np.pi))
-    return a * np.exp(-(x - m) ** 2 / (2. * sd ** 2))
-
-
 def fit_res_curve(x, m1, sd1, s1):
-    """
-    function that calculates the fit residuals
+    """function that calculates the fit residuals
     http://stackoverflow.com/questions/10143905/python-two-curve-gaussian-fitting-with-non-linear-least-squares
 
-    p: parameters [m1, sd1, s1] (mean, standard dev, strength)
-    y: real function
-    x: grid?
+    Args:
+        x: grid
+        m1: center of the gaussian
+        sd1: standard deviation of the gaussian
+        s1: scale value for the gaussian (here full reflectivity)
     """
     y_fit = s1 * gauss_func(x, m1, sd1)
     return y_fit
 
 #@profile
 def fit_peak(spec_corr, moments):
+    """fit one peak to the fuzzy membership filtered spectrum
 
-    """
-    fit one peak to the fuzzy membership filtered spectrum
-
-    current initial parameters: p = [mean, width, reflectivity]
-
-    :param spec_corr: wind profiler data pixel
-    :return: dataPixel
+    Args:
+        spectrum_corr (dict): Bragg only spectrum
+        moments (list of mom): list of the moments for this spectrum
+    Returns:
+        Bragg only spectrum dict
     """
 
     logger.debug('=====    fit peak =================================================')
@@ -645,7 +707,7 @@ def fit_peak(spec_corr, moments):
         else:
             ileft, iright = -1, -1
         moments_fit.append(
-            mom(h.lin2z(np.sum(fitted_spectrum - 1e-100)), param_lsq[0], param_lsq[1],
+            h.mom(h.lin2z(np.sum(fitted_spectrum - 1e-100)), param_lsq[0], param_lsq[1],
                 ileft, iright, 
                 h.lin2z(np.sum(fitted_spectrum - 1e-100)/spec_corr['noise_thres']/3.)))
         logger.debug('moments from fit %s', [h.lin2z(param_lsq[2]/spec_corr['delta_v']), param_lsq[0], param_lsq[1],
@@ -653,7 +715,7 @@ def fit_peak(spec_corr, moments):
 
     except RuntimeError:
         logger.debug('# not enough rayleigh signal')
-        moments_fit = [mom(-200, -99., -99., -1, -1, -200)]
+        moments_fit = [h.mom(-200, -99., -99., -1, -1, -200)]
         fitted_spectrum = spec_corr['specZ'].copy()
         fitted_spectrum[:] = 1e-20
         err_lsq = [-99.]
@@ -661,7 +723,7 @@ def fit_peak(spec_corr, moments):
     if moments_fit[0].width <= 0.07 \
             or moments_fit[0].Z < -50 or np.isnan(moments_fit[0].Z):
         # fitted peak too small (testcase eg 2015-06-17_2130 8014)
-        moments_fit = [mom(-200, -99., -99., -1, -1, -200)]
+        moments_fit = [h.mom(-200, -99., -99., -1, -1, -200)]
         # for the moment do not overwrite if it fails
         #fitted_spectrum = spec_corr['specZ'].copy()
         #fitted_spectrum[:] = 1e-20
@@ -669,12 +731,12 @@ def fit_peak(spec_corr, moments):
     if np.abs(moments_fit[0].width-0.2) < 0.15 and np.abs(moments_fit[0].v-0.5) < 0.01:
         # fit somehow failed
         logger.info('moment fit replicated input')
-        moments_fit = [mom(-200, -99., -99., -1, -1, -200)]
+        moments_fit = [h.mom(-200, -99., -99., -1, -1, -200)]
 
     # if np.abs(moments_fit[0].width-p[1]) < 0.15 and np.abs(moments_fit[0].v-p[1]) < 0.01:
     #     # fit somehow failed
     #     print('moment fit replicated input')
-    #     moments_fit = [mom(-200, -99., -99., -1, -1, -200)]
+    #     moments_fit = [h.mom(-200, -99., -99., -1, -1, -200)]
 
     spec_corr = {'range': spec_corr['range'], 'ts': spec_corr['ts'], 'system': 'fit',
         'specZ': fitted_spectrum,
@@ -689,8 +751,24 @@ def fit_peak(spec_corr, moments):
 
 
 def estimate_flag(bflag, corr_moments, cr_moments, cr_ldr, bounds_unfiltered_moments):
-    """
-    :bflag: dict for the binary flag
+    """retrieve the integer flag from the binary flag
+
+    the available integer flags are:
+
+    .. code-block:: python
+
+        {0: 'not influenced', 1: 'hydromet only',
+         2: 'plankton', 3: 'low snr',
+         4: '', 5: 'melting layer'}
+
+    Args:
+        bflag (dict): binary flag dict
+        corr_moments (list): list with the corrected moments
+        cr_moments (list): list with the cloud radar moemnts
+        cr_ldr (float): cloud radar ldr in dB
+        bounds_unfiltered_moments (list): all peak boundaries
+    Returns:
+        add_to_binary_flag, flag, flag_doc
 
     """
     # do not overwrite bflag here! (this has to be done at top level)
@@ -734,10 +812,18 @@ def estimate_flag(bflag, corr_moments, cr_moments, cr_ldr, bounds_unfiltered_mom
 
 
 def get_index(grid_mids, values):
+    """get the index of a value in an array
+
+    Args:
+        grid_mids: array of grid centers
+        value: array of values
+    Returns:
+        indices        
+    """
     diff = np.diff(grid_mids)
     diff = np.concatenate((diff, diff[-1:]))
     edges = np.concatenate((grid_mids-diff/2, grid_mids[-1:]+diff[-1:]/2))
-    print(edges)
+    #print(edges)
     ind = np.digitize(np.array(values), edges)-1
     ind[ind > grid_mids.shape[0]-1] = grid_mids.shape[0]-1
     return ind
@@ -745,18 +831,19 @@ def get_index(grid_mids, values):
 
 #@profile
 def estimate_error(method, separation, contrast):
-    """
-    estimate the error for given separation and contrast form Monte Carlo simulation
-    
-    new version with the faster get_index method (using np.digitize)
-    :return:
-    """
+    """estimate the error for given separation and contrast form Monte Carlo simulation
 
+    Args:
+        method: ``diff`` of ``fit``
+        separation: array of separations
+        contrast: array of separations
+    Returns:
+        array of estimated error
+    """
     loaded = np.load('data/results_2D_{}_statistics.npz'.format(method))
     #print(loaded.keys())
     index_sep = get_index(loaded['separation'], separation)
     index_con = get_index(loaded['contrast'], contrast)
-
     est_error_2D = loaded['mean_error'][index_sep, index_con]
 
     return est_error_2D
@@ -764,7 +851,11 @@ def estimate_error(method, separation, contrast):
 
 
 def calc_separation(bragg_mom, moments_broad):
-
+    """
+    Args:
+        bragg_mom: moments of the Bragg peak
+        moments_broad: moments of the (adapted to RWP sampling) cloud radar peak
+    """
     input_vals = np.array([bragg_mom.v, moments_broad.v, moments_broad.width, bragg_mom.width])
     if np.any(input_vals < - 90) or np.any(np.isnan(input_vals)):
         separation = -99.
@@ -774,6 +865,13 @@ def calc_separation(bragg_mom, moments_broad):
 
 
 def calc_contrast(spec_corr, spec_broad, v):
+    """
+    Args:
+        spec_corr (dict): Bragg only spectrum
+        spec_broad (dict): spectra dict of cloud radar 
+            adapted to rwp sampling characteristics
+        v (float): velocity at which the contrast is evlauated
+    """
     index_vel = np.argmin(np.abs(spec_corr['vel'] - v))
     assert np.all(spec_corr['vel'] == spec_broad['vel'])
     contrast = h.lin2z(spec_corr['specZ'][index_vel]) - h.lin2z(spec_broad['specZ'][index_vel])
@@ -781,6 +879,12 @@ def calc_contrast(spec_corr, spec_broad, v):
 
 
 def bflag2str(bflag):
+    """
+    Args:
+        bflag (dict): binary flag
+    Returns:
+        flag as binary string, keys
+    """
     l = []
     #print("flag keys ", bflag.keys())
     #['plankton', 'small_Z_diff', 'melting_layer', 'too_many_peaks']
@@ -797,14 +901,39 @@ def bflag2str(bflag):
 
 
 def bin2int(bin):
+    """convert the binary (as string) to integer"""
     #print('bin conversion', bin, int(bin, 2))
     return int(bin, 2)
 
+
 #@profile
 def correct_pixel(cr, rwp, advect, sel_ts, sel_range, visualize=False):
-    """
-    do the correction for a single pixel
-    as done by the old version of mole
+    """do the correction for a single pixel
+
+    Args:
+        cr: cloud radar handler
+        rwp: radar wind profiler handler
+        advect: advection handler
+        sel_ts (tuple or float): either value or (index, value)
+        sel_range (tuple or float): either value or (index, value)
+        visualize (bool, optional): plot the single spectrum
+    Returns:
+        dict with estimated values
+
+
+    ====================  ===============================================================
+     Key                  Example                            
+    ====================  ===============================================================
+     ``bragg_weighting``  vertical velocity estimated with the weighting method                                                      
+     ``bragg_fit``        vertical velocity estimated with the fit method
+     ``spec_rwp``         spectra dict of the radar wind profiler
+     ``spec_broad``       spectra dict of the cloud radar (adapted to rwp)
+     ``flag``             integer flag
+     ``bflag``            binary flag (dict)
+     ``metrics``          separation and contrast
+     ``cal_const``        used calibration constant
+     ``cal_corr``         correct calibration by
+    ====================  ===============================================================
     """
     bflag = {}
 
@@ -882,7 +1011,6 @@ def correct_pixel(cr, rwp, advect, sel_ts, sel_range, visualize=False):
         bflag.update(flg)
 
 
-
         savepath = '../plots/{}/'.format(h.ts_to_dt(ts).strftime('%Y-%m-%d_%H%M%S'))
         vis.plot_spectrum(
             [spec, spec_broad, rwp_weighting, rwp_fuzzy, spec_rwp, rwp_fit], 
@@ -908,17 +1036,13 @@ def correct_pixel(cr, rwp, advect, sel_ts, sel_range, visualize=False):
     return ret
 
 
-
-
 class mira():
-    """
-    handles cloud radar spectra
-    """
+    """handles cloud radar spectra
 
+    Args:
+        files (dict): filenames for spectral, cloudnet and mmclx
+    """
     def __init__(self, files):
-        """
-        loads the .nc file via filename
-        """
         print("---- cloud radar ---------------------------------------------------")
 
         self.files = files
@@ -930,6 +1054,7 @@ class mira():
         self.vel_list = self.fspec.variables["velocity"][:]
         # for some reason the velocity list is not sorted
         self.vel_list = np.sort(self.vel_list)
+        self.vel_list = self.vel_list.data
         self.time_list = self.fspec.variables["time"][:].astype(np.int32)
         # correct an offset estimated by plots (comparison with wp)
         # self.time_list = self.time_list-30.
@@ -940,6 +1065,7 @@ class mira():
         self.delta_t = np.mean(np.diff(self.time_list))
         self.delta_v = np.mean(np.diff(self.vel_list))
         self.range_list = self.fspec.variables["range"][:]
+        self.range_list = self.range_list.data
         self.delta_h = np.mean(np.diff(self.range_list))
         assert abs(self.delta_h - 28.78) < 2, 'delta h too much off'
         print("load cloud radar file ", self.files['spec'])
@@ -967,17 +1093,22 @@ class mira():
 
 
     def __del__(self):
-        """
-        close file when object is deleted, sort of an evil hack (mmap, with statement...)
+        """close file when object is deleted, sort of an evil hack (mmap, with statement...)
         """
         self.fspec.close()
         self.fmmclx.close()
 
 
     def get_profile(self, it, ir=(0,-1)):
-        """
-        get the mmclx velocity profile
-        .. warning:: currently using VEL
+        """get the mmclx velocity profile
+
+        .. warning:: currently using Zg, RMSg togehter with VEL
+
+        Args:
+            it: time index
+            ir (tuple, optional): range indices, default full profile
+        Returns:
+            vel, Z, width        
         """
         vel = self.fmmclx.variables["VEL"][it, ir[0]:ir[1]]
         vel = np.ma.masked_invalid(vel)
@@ -992,10 +1123,15 @@ class mira():
     #@profile
     def get_spectrum(self, sel_ts, sel_range, silent=False, range_average=False):
         """
-        :sel_ts: either ts or (it, ts)
-        :sel_range: either rg or (ir, rg)
+        Args:
+            sel_ts (float or tuple): either timestamp or (it, timestamp)
+            sel_range (float or tuple): either range or (ir, range)
+            silent (bool, optional): printing diagnostics
+            range_average (bool, optional): range average to adapt for the
+                rwp range gate
+        Returns:
+            spectrum dict
         """
-
         logger.info('sel ts %s', sel_ts)
         if type(sel_ts) is tuple and type(sel_range) is tuple:
             it, sel_ts = sel_ts
@@ -1123,11 +1259,9 @@ class mira():
 
 class rwp():
     """
-    handles radar wind profiler spectra
-
-    :return:
+    Args:
+        files (dict): filename for rwp
     """
-
     def __init__(self, files):
         print("---- wind profiler -------------------------------------------------")
         self.files = files
@@ -1191,28 +1325,25 @@ class rwp():
                          'thres_factor': 3.0}
 
     def __del__(self):
-        """
-        close file when object is deleted, sort of an evil hack (mmap, with statement...)
+        """close file when object is deleted, sort of an evil hack (mmap, with statement...)
         """
         self.f.close()
 
     #@profile
     def get_spectrum(self, sel_ts, sel_range, silent=False, interp_vel=False, cal_corr=None):
-        """
-        :sel_ts: either ts or (it, ts)
-        :sel_range: either rg or (ir, rg)
-
-        :param interp_vel: velocity array to interpolate
-
-
-        load the windprofiler spectrum, process it
-        and height interpolate to the desired (velocity) resolution
-        if a velocity list is given, the spectra is interpolated to the given values
-        timestamps have to be of standard integer type::
+        """return a single spectrum
 
         .. warning:: rwp spectrum is smoothed with a gaussian shaped running window
-        """
 
+        Args:
+            sel_ts (float or tuple): either timestamp or (it, timestamp)
+            sel_range (float or tuple): either range or (ir, range)
+            silent (bool, optional): printing diagnostics
+            interp_vel (bool, optional): velocity array to interpolate
+
+        Returns:
+            spectrum dict
+        """
         if type(sel_ts) is tuple and type(sel_range) is tuple:
             it, sel_ts = sel_ts
             ir, sel_range = sel_range
@@ -1290,11 +1421,9 @@ class rwp():
 
 class mole_output():
     """
-    handles output
-
-    :return:
+    Args:
+        files (dict): filename for mole
     """
-
     def __init__(self, files):
         print("---- mole -------------------------------------------------")
         print(files['mole'])
@@ -1327,15 +1456,23 @@ class mole_output():
         print("height range ", self.range_list[0], self.range_list[-1])
         print("height resolution [m]", self.delta_h)
 
+
     def __del__(self):
         """
         close file when object is deleted, sort of an evil hack (mmap, with statement...)
         """
         self.f.close()
 
-    def get_interpolated_profile(self, it, interp_heights):
-        """ """
 
+    def get_interpolated_profile(self, it, interp_heights):
+        """load the windprofiler spectrum
+
+        Args:
+            it (int): index of timestamp
+            interp_heights (array): dersired height grid
+        Returns:
+            profile of velocities, flag
+        """
         # load mask
         self.flag = self.f.variables["quality_flag"][it,:]
         self.flag = np.ma.masked_less_equal(self.flag, -1.)
@@ -1366,3 +1503,169 @@ class mole_output():
         interp_flag = f(interp_heights)
 
         return interp_values, interp_flag
+
+
+
+def correct_region(bounds, files):
+    """run the correction for a specified region
+
+    Args:
+        bounds (dict): time and height boundaries for this case
+        files (dict): file list for this case
+    Returns:
+        data dict with the results
+    """
+    cr_handler = mira(files)
+    rwp_handler = rwp(files)
+    advect = advection.cloudnet_advect(files['cloudnet'])
+    
+    coverage = {}
+    coverage['mira_begin'] = h.dt_to_ts(bounds['b_dt']) - cr_handler.time_list[0] # positive is ok
+    coverage['mira_end'] = cr_handler.time_list[-1] - h.dt_to_ts(bounds['e_dt']) # positive is ok
+    coverage['rwp_begin'] = h.dt_to_ts(bounds['b_dt']) - rwp_handler.time_list[0] # positive is ok
+    coverage['rwp_end'] = rwp_handler.time_list[-1] - h.dt_to_ts(bounds['e_dt']) # positive is ok
+    assert all(i >= -70 for i in list(coverage.values())), "not enough coverage {}".format(str(coverage))
+    
+    b_it = np.where(rwp_handler.time_list == min(rwp_handler.time_list, key=lambda t: abs(h.dt_to_ts(bounds['b_dt']) - t)))[0][0]
+    b_ir = np.where(rwp_handler.range_list == min(rwp_handler.range_list, key=lambda t: abs(bounds['b_rg'] - t)))[0][0]
+    e_it = np.where(rwp_handler.time_list == min(rwp_handler.time_list, key=lambda t: abs(h.dt_to_ts(bounds['e_dt']) - t)))[0][0]
+    e_ir = np.where(rwp_handler.range_list == min(rwp_handler.range_list, key=lambda t: abs(bounds['e_rg'] - t)))[0][0]
+    e_it += 1
+    e_ir += 1
+    print('it ', b_it, e_it, 'ir ', b_ir, e_ir)
+    
+    # corrected velocity region
+    var = np.empty((e_it - b_it, e_ir - b_ir))
+    var[:] = np.nan
+    data = collections.defaultdict(var.copy)
+    
+    data['time_list'] = rwp_handler.time_list[b_it:e_it]
+    data['range_list'] = rwp_handler.range_list[b_ir:e_ir]
+    data['cal_const_used'] = rwp_handler.settings['cal_const']
+    
+    spectra_no = (e_it - b_it) * (e_ir - b_ir)
+    spectra_ct = 0
+    for it in range(b_it, e_it):
+        sel_ts = (it, rwp_handler.time_list[it])
+        for ir in range(b_ir, e_ir):
+            sel_rg = (ir, rwp_handler.range_list[ir])
+            corr = correct_pixel(cr_handler, rwp_handler, advect, sel_ts, sel_rg)
+            
+            data['flag'][it - b_it, ir - b_ir] = corr['flag']
+            if 'flag_doc' in corr.keys():
+                data['flag_doc'] = corr['flag_doc']
+            data['bflag'][it - b_it, ir - b_ir] = bin2int(
+                bflag2str(corr['bflag'])[0])
+            
+            data['bragg_weight_Z'][it - b_it, ir - b_ir] = corr['bragg_weighting'].Z
+            data['bragg_weight_v'][it - b_it, ir - b_ir] = corr['bragg_weighting'].v
+            data['bragg_weight_width'][it - b_it, ir - b_ir] = corr['bragg_weighting'].width
+            data['bragg_fit_Z'][it - b_it, ir - b_ir] = corr['bragg_fit'].Z
+            data['bragg_fit_v'][it - b_it, ir - b_ir] = corr['bragg_fit'].v
+            data['bragg_fit_width'][it - b_it, ir - b_ir] = corr['bragg_fit'].width
+            
+            data['rwp_raw_Z'][it - b_it, ir - b_ir] = corr['spec_rwp']['moments'][0].Z
+            data['rwp_raw_vel'][it - b_it, ir - b_ir] = corr['spec_rwp']['est_meanvel']
+            data['rwp_raw_width'][it - b_it, ir - b_ir] = corr['spec_rwp']['moments'][0].width
+            data['rwp_raw_noise'][it - b_it, ir - b_ir] = corr['spec_rwp']['noise_lvl']
+            
+            data['cr_Z'][it - b_it, ir - b_ir] = corr['spec_broad']['moments'][0].Z
+            data['cr_vel'][it - b_it, ir - b_ir] = corr['spec_broad']['moments'][0].v
+            data['cr_width'][it - b_it, ir - b_ir] = corr['spec_broad']['moments'][0].width
+            data['broadening'][it - b_it, ir - b_ir] = corr['spec_broad']['sigma_b']
+            # vterm missing
+            
+            data['separation'][it - b_it, ir - b_ir] = corr['metrics'][0]
+            data['contrast'][it - b_it, ir - b_ir] = corr['metrics'][1]
+            
+            data['cal_const'][it - b_it, ir - b_ir] = corr['cal_const']
+            data['cal_corr'][it - b_it, ir - b_ir] = corr['cal_corr']
+
+            
+    #data['error_weight'] = estimate_error('diff', data['separation'], data['contrast'])
+    #data['error_fit'] = estimate_error('fit', data['separation'], data['contrast'])
+
+    data['error_weight'] = estimate_error('diff', data['separation'], data['contrast'])
+    data['error_fit'] = estimate_error('fit', data['separation'], data['contrast'])
+    for key in data.keys():
+        if isinstance(data[key], np.ndarray):
+            print('key is ndarray', key)
+            print('contains nans? ', np.any(np.isnan(data[key])))
+            #data[key] = np.ma.masked_invalid(data[key], copy=True)
+#     self.v_term = self.clara.v_reg - np.ma.masked_where(self.flag_region > 3.0, self.corr_vel_reg)
+    print('time_list', data['time_list'])
+    print('flag', data['flag'])
+    print('cal_corr', data['cal_corr'])
+    print('bragg_weight_Z', data['bragg_weight_Z'])
+    print('separation', data['separation'])
+    print('error fit', data['error_fit'])
+    #logger.debug('done with correction')
+
+    return data
+
+
+def terminal_region(bounds, files):
+    """calculate the terminal velocity for a specified region
+
+    Args:
+        bounds (dict): time and height boundaries for this case
+        files (dict): file list for this case
+    Returns:
+        data dict with the results
+    """
+    cr_handler = mira(files)
+    mole = mole_output(files)
+    coverage = {}
+
+    coverage['mira_begin'] = h.dt_to_ts(bounds['b_dt']) - cr_handler.time_list[0] # positive is ok
+    coverage['mira_end'] = cr_handler.time_list[-1] - h.dt_to_ts(bounds['e_dt']) # positive is ok
+    coverage['mole_begin'] = h.dt_to_ts(bounds['b_dt']) - mole.time_list[0] # positive is ok
+    coverage['mole_end'] = mole.time_list[-1] - h.dt_to_ts(bounds['e_dt']) # positive is ok
+    assert all(i >= -70 for i in list(coverage.values())), "not enough coverage {}".format(str(coverage))
+
+    b_it = np.where(cr_handler.time_list == min(cr_handler.time_list, key=lambda t: abs(h.dt_to_ts(bounds['b_dt']) - t)))[0][0]
+    b_ir = np.where(cr_handler.range_list == min(cr_handler.range_list, key=lambda t: abs(bounds['b_rg'] - t)))[0][0]
+    e_it = np.where(cr_handler.time_list == min(cr_handler.time_list, key=lambda t: abs(h.dt_to_ts(bounds['e_dt']) - t)))[0][0]
+    e_ir = np.where(cr_handler.range_list == min(cr_handler.range_list, key=lambda t: abs(bounds['e_rg'] - t)))[0][0]
+    e_it += 1
+    e_ir += 1
+    print('it ', b_it, e_it, 'ir ', b_ir, e_ir)
+
+    # corrected velocity region
+    #var = np.empty((e_it - b_it, cr_handler.range_list.shape[0]))
+    var = np.empty((e_it - b_it, e_ir - b_ir))
+    var[:] = np.nan
+    data = collections.defaultdict(var.copy)
+    
+    data['time_list'] = cr_handler.time_list[b_it:e_it]
+    data['range_list'] = cr_handler.range_list[b_ir:e_ir]
+    data['flag_doc'] = mole.f.variables["quality_flag"].comment
+
+    for it in range(b_it, e_it):
+    #for it in range(b_it, b_it+10):
+        it_mole = h.argnearest2(mole.time_list, cr_handler.time_list[it])
+
+        print('it cr ', it, ' mole ', it_mole)
+        print('times cr ', cr_handler.time_list[it],  h.ts_to_dt(cr_handler.time_list[it]), 
+                 mole.time_list[it_mole], h.ts_to_dt(mole.time_list[it_mole]))
+
+        if abs(cr_handler.time_list[it] - mole.time_list[it_mole]) > 5:
+            # mole profile too far away (on time axis) -> mask
+            print('at {} not fitting mole profile'.format(h.ts_to_dt(cr_handler.time_list[it])))
+
+        else:
+            vair, flag_air = mole.get_interpolated_profile(it_mole, cr_handler.range_list[b_ir:e_ir])
+            vvert, Z, width = cr_handler.get_profile(it, (b_ir, e_ir))
+            assert vair.shape == vvert.shape, "shapes of the velocity profiles not fitting"
+
+            vterm = vvert - vair
+            #print(vterm.mask[15:25])
+            #print(vterm.mask[-15:])
+            data['terminal_vel'][it - b_it, :] = vterm
+            data['vertical_vel'][it - b_it, :] = vvert
+            data['air_vel'][it - b_it, :] = vair
+            data['quality_flag'][it - b_it, :] = flag_air
+            data['Z'][it - b_it, :] = 10*np.log10(Z)
+            data['width'][it - b_it, :] = width
+    
+    return data, mole.f.__dict__
