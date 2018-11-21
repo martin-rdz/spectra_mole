@@ -3,10 +3,10 @@ plots
 .idea
 .cache
 .vscode
-docs/*
-docs/source/*
-!docs/source/conf.py
-!docs/Makefile
+docs/build
+docs/build/doctrees/
+docs/make.bat
+docs/source/conf_old.py
 *.zip
 *.py~
 *.pyc
